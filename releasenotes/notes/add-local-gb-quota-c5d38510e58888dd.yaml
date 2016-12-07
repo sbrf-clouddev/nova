@@ -1,0 +1,5 @@
+---
+features:
+  - Introduce a new quota resouce called 'local_gb'. This resource accounts
+    usage of disks by instance, specifically, it sums root_gb (root disk) and
+    ephemeral_gb (ephemeral storage) based on the instance's flavor.

@@ -3003,8 +3003,11 @@ class API(base.Base):
                                                   current_flavor)
         if deltas:
             try:
-                res_deltas = {'cores': deltas.get('cores', 0),
-                              'ram': deltas.get('ram', 0)}
+                res_deltas = {
+                    'cores': deltas.get('cores', 0),
+                    'ram': deltas.get('ram', 0),
+                    'local_gb': deltas.get('local_gb', 0),
+                }
                 objects.Quotas.check_deltas(context, res_deltas,
                                             project_id, user_id=user_id,
                                             check_project_id=project_id,

@@ -893,6 +893,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                 instances=5,
                 cores=20,
                 ram=25 * 1024,
+                local_gb=150,
                 floating_ips=10,
                 fixed_ips=10,
                 metadata_items=64,
@@ -941,6 +942,7 @@ class DbQuotaDriverTestCase(test.TestCase):
                 instances=5,
                 cores=20,
                 ram=25 * 1024,
+                local_gb=150,
                 floating_ips=10,
                 fixed_ips=10,
                 metadata_items=64,
@@ -1108,7 +1110,12 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     ),
-               floating_ips=dict(
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    ),
+                floating_ips=dict(
                     limit=10,
                     in_use=2,
                     reserved=0,
@@ -1243,7 +1250,12 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     ),
-               floating_ips=dict(
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    ),
+                floating_ips=dict(
                     limit=10,
                     in_use=2,
                     reserved=0,
@@ -1335,6 +1347,12 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     remains=25 * 1024,
+                    ),
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    remains=150,
                     ),
                 floating_ips=dict(
                     limit=10,
@@ -1436,6 +1454,11 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     ),
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    ),
                 floating_ips=dict(
                     limit=10,
                     in_use=2,
@@ -1524,7 +1547,12 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     ),
-               floating_ips=dict(
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    ),
+                floating_ips=dict(
                     limit=10,
                     in_use=2,
                     reserved=0,
@@ -1615,6 +1643,11 @@ class DbQuotaDriverTestCase(test.TestCase):
                     in_use=10 * 1024,
                     reserved=0,
                     ),
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
+                    reserved=0,
+                    ),
                 floating_ips=dict(
                     limit=10,
                     in_use=2,
@@ -1703,6 +1736,11 @@ class DbQuotaDriverTestCase(test.TestCase):
                 ram=dict(
                     limit=25 * 1024,
                     in_use=10 * 1024,
+                    reserved=0,
+                    ),
+                local_gb=dict(
+                    limit=150,
+                    in_use=0,
                     reserved=0,
                     ),
                 floating_ips=dict(
@@ -1851,6 +1889,9 @@ class DbQuotaDriverTestCase(test.TestCase):
                 ram=dict(
                     limit=25 * 1024,
                     ),
+                local_gb=dict(
+                    limit=150,
+                    ),
                 floating_ips=dict(
                     limit=10,
                     ),
@@ -1906,6 +1947,9 @@ class DbQuotaDriverTestCase(test.TestCase):
                     ),
                 ram=dict(
                     limit=25 * 1024,
+                    ),
+                local_gb=dict(
+                    limit=150,
                     ),
                 floating_ips=dict(
                     limit=10,
@@ -2030,6 +2074,10 @@ class DbQuotaDriverTestCase(test.TestCase):
                     'minimum': 0,
                     'maximum': 50 * 1024,
                     },
+                'local_gb': {
+                    'minimum': 0,
+                    'maximum': 150,
+                    },
                 'floating_ips': {
                     'minimum': 0,
                     'maximum': 20,
@@ -2096,6 +2144,10 @@ class DbQuotaDriverTestCase(test.TestCase):
                     'maximum': -1,
                     },
                 'ram': {
+                    'minimum': 0,
+                    'maximum': -1,
+                    },
+                'local_gb': {
                     'minimum': 0,
                     'maximum': -1,
                     },
@@ -2169,6 +2221,10 @@ class DbQuotaDriverTestCase(test.TestCase):
                 'ram': {
                     'minimum': 0,
                     'maximum': 50 * 1024,
+                    },
+                'local_gb': {
+                    'minimum': 0,
+                    'maximum': 150,
                     },
                 'floating_ips': {
                     'minimum': 0,

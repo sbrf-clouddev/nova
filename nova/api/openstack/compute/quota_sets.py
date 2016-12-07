@@ -18,6 +18,7 @@ from oslo_utils import strutils
 import six.moves.urllib.parse as urlparse
 import webob
 
+from nova.api.openstack import api_version_request
 from nova.api.openstack.api_version_request \
     import MAX_PROXY_API_SUPPORT_VERSION
 from nova.api.openstack.api_version_request \
@@ -102,9 +103,11 @@ class QuotaSetsController(wsgi.Controller):
 
         params = urlparse.parse_qs(req.environ.get('QUERY_STRING', ''))
         user_id = params.get('user_id', [None])[0]
-        return self._format_quota_set(id,
-            self._get_quotas(context, id, user_id=user_id),
-            filtered_quotas=filtered_quotas)
+        quotas = self._get_quotas(context, id, user_id=user_id)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            quotas.pop('local_gb', None)
+        return self._format_quota_set(
+            id, quotas, filtered_quotas=filtered_quotas)
 
     @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(400)
@@ -122,10 +125,11 @@ class QuotaSetsController(wsgi.Controller):
         identity.verify_project_id(context, id)
 
         user_id = req.GET.get('user_id', None)
+        quotas = self._get_quotas(context, id, user_id=user_id, usages=True)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            quotas.pop('local_gb', None)
         return self._format_quota_set(
-            id,
-            self._get_quotas(context, id, user_id=user_id, usages=True),
-            filtered_quotas=filtered_quotas)
+            id, quotas, filtered_quotas=filtered_quotas)
 
     @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(400)
@@ -157,6 +161,11 @@ class QuotaSetsController(wsgi.Controller):
         if not CONF.enable_network_quota and 'networks' in quota_set:
             raise webob.exc.HTTPBadRequest(
                 explanation=_('The networks quota is disabled'))
+
+        if ('local_gb' in quota_set and
+                not api_version_request.is_supported(req, min_version='2.54')):
+            raise webob.exc.HTTPBadRequest(explanation=_(
+                "Cannot update 'local_gb' quota with current microversion."))
 
         force_update = strutils.bool_from_string(quota_set.get('force',
                                                                'False'))
@@ -190,12 +199,13 @@ class QuotaSetsController(wsgi.Controller):
             except exception.QuotaExists:
                 objects.Quotas.update_limit(context, project_id,
                                             key, value, user_id=user_id)
+        quotas = self._get_quotas(context, id, user_id=user_id)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            quotas.pop('local_gb', None)
         # Note(gmann): Removed 'id' from update's response to make it same
         # as V2. If needed it can be added with microversion.
         return self._format_quota_set(
-            None,
-            self._get_quotas(context, id, user_id=user_id),
-            filtered_quotas=filtered_quotas)
+            None, quotas, filtered_quotas=filtered_quotas)
 
     @wsgi.Controller.api_version("2.0", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(400)
@@ -213,6 +223,8 @@ class QuotaSetsController(wsgi.Controller):
         identity.verify_project_id(context, id)
 
         values = QUOTAS.get_defaults(context)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            values.pop('local_gb', None)
         return self._format_quota_set(id, values,
             filtered_quotas=filtered_quotas)
 

@@ -50,6 +50,8 @@ class UsedLimitsController(wsgi.Controller):
                 'totalSecurityGroupsUsed': 'security_groups',
                 'totalServerGroupsUsed': 'server_groups',
             }
+        if api_version_request.is_supported(req, min_version='2.54'):
+            quota_map['totalLocalGBUsed'] = 'local_gb'
 
         used_limits = {}
         for display_name, key in quota_map.items():

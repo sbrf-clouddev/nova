@@ -22,6 +22,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import exception
+from nova.i18n import _
 from nova import objects
 from nova.policies import quota_class_sets as qcs_policies
 from nova import quota
@@ -75,6 +76,8 @@ class QuotaClassSetsController(wsgi.Controller):
         context = req.environ['nova.context']
         context.can(qcs_policies.POLICY_ROOT % 'show', {'quota_class': id})
         values = QUOTAS.get_class_quotas(context, id)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            values.pop('local_gb', None)
         return self._format_quota_set(id, values, req)
 
     @extensions.expected_errors(400)
@@ -93,10 +96,17 @@ class QuotaClassSetsController(wsgi.Controller):
         quota_class = id
 
         for key, value in body['quota_class_set'].items():
+            if (key == 'local_gb' and not api_version_request.is_supported(
+                    req, min_version='2.54')):
+                raise webob.exc.HTTPBadRequest(explanation=_(
+                    "Cannot update 'local_gb' quota with "
+                    "current microversion."))
             try:
                 objects.Quotas.update_class(context, quota_class, key, value)
             except exception.QuotaClassNotFound:
                 objects.Quotas.create_class(context, quota_class, key, value)
 
         values = QUOTAS.get_class_quotas(context, quota_class)
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            values.pop('local_gb', None)
         return self._format_quota_set(None, values, req)

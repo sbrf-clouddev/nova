@@ -14,9 +14,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import ddt
 import mock
 import webob
 
+from nova.api.openstack import api_version_request as api_version
 from nova.api.openstack.compute import quota_sets as quotas_v21
 from nova import db
 from nova import exception
@@ -28,8 +30,9 @@ from nova.tests.unit.api.openstack import fakes
 
 def quota_set(id, include_server_group_quotas=True):
     res = {'quota_set': {'id': id, 'metadata_items': 128,
-           'ram': 51200, 'floating_ips': 10, 'fixed_ips': -1,
-           'instances': 10, 'injected_files': 5, 'cores': 20,
+           'ram': 51200, 'local_gb': 150, 'floating_ips': 10,
+           'fixed_ips': -1, 'instances': 10,
+           'injected_files': 5, 'cores': 20,
            'injected_file_content_bytes': 10240,
            'security_groups': 10, 'security_group_rules': 20,
            'key_pairs': 100, 'injected_file_path_bytes': 255}}
@@ -55,6 +58,7 @@ class BaseQuotaSetsTest(test.TestCase):
         return self.controller.delete.wsgi_code
 
 
+@ddt.ddt
 class QuotaSetsTestV21(BaseQuotaSetsTest):
     plugin = quotas_v21
     validation_error = exception.ValidationError
@@ -67,6 +71,7 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
             'instances': 10,
             'cores': 20,
             'ram': 51200,
+            'local_gb': 150,
             'floating_ips': 10,
             'fixed_ips': -1,
             'metadata_items': 128,
@@ -84,7 +89,9 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
     def _setup_controller(self):
         self.controller = self.plugin.QuotaSetsController()
 
-    def _get_http_request(self, url=''):
+    def _get_http_request(self, url='', version=None):
+        if version:
+            return fakes.HTTPRequest.blank(url, version=version)
         return fakes.HTTPRequest.blank(url)
 
     def test_format_quota_set(self):
@@ -96,6 +103,7 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self.assertEqual(qs['id'], '1234')
         self.assertEqual(qs['instances'], 10)
         self.assertEqual(qs['cores'], 20)
+        self.assertEqual(qs['local_gb'], 150)
         self.assertEqual(qs['ram'], 51200)
         self.assertEqual(qs['floating_ips'], 10)
         self.assertEqual(qs['fixed_ips'], -1)
@@ -159,39 +167,67 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
                           self.controller._validate_quota_limit,
                           resource, db.MAX_INT + 1, -1, -1)
 
-    def test_quotas_defaults(self):
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_quotas_defaults(self, microversion):
         uri = '/v2/fake_tenant/os-quota-sets/fake_tenant/defaults'
+        req = fakes.HTTPRequest.blank(uri, version=microversion)
 
-        req = fakes.HTTPRequest.blank(uri)
         res_dict = self.controller.defaults(req, 'fake_tenant')
+
         self.default_quotas.update({'id': 'fake_tenant'})
         expected = {'quota_set': self.default_quotas}
+        if (req.api_version_request > api_version.APIVersionRequest('2.35')):
+            for k in ('floating_ips', 'fixed_ips', 'security_groups',
+                      'security_group_rules'):
+                expected['quota_set'].pop(k, None)
+        if (req.api_version_request < api_version.APIVersionRequest('2.54')):
+            expected['quota_set'].pop('local_gb', None)
 
         self.assertEqual(res_dict, expected)
 
-    def test_quotas_show(self):
-        req = self._get_http_request()
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_quotas_show(self, microversion):
+        req = self._get_http_request(version=microversion)
+
         res_dict = self.controller.show(req, 1234)
 
         ref_quota_set = quota_set('1234', self.include_server_group_quotas)
+        if (req.api_version_request > api_version.APIVersionRequest('2.35')):
+            for k in ('floating_ips', 'fixed_ips', 'security_groups',
+                      'security_group_rules'):
+                ref_quota_set['quota_set'].pop(k, None)
+        if (req.api_version_request < api_version.APIVersionRequest('2.54')):
+            ref_quota_set['quota_set'].pop('local_gb', None)
         self.assertEqual(res_dict, ref_quota_set)
 
-    def test_quotas_update(self):
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_quotas_update(self, microversion):
         self.default_quotas.update({
             'instances': 50,
             'cores': 50
         })
         body = {'quota_set': self.default_quotas}
-        req = self._get_http_request()
+        req = self._get_http_request(version=microversion)
+        if (req.api_version_request > api_version.APIVersionRequest('2.35')):
+            for k in ('floating_ips', 'fixed_ips', 'security_groups',
+                      'security_group_rules'):
+                body['quota_set'].pop(k, None)
+        if (req.api_version_request < api_version.APIVersionRequest('2.54')):
+            body['quota_set'].pop('local_gb', None)
+
         res_dict = self.controller.update(req, 'update_me', body=body)
+
         self.assertEqual(body, res_dict)
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_quotas_update_with_good_data(self, mock_createlimit):
         self.default_quotas.update({})
         body = {'quota_set': self.default_quotas}
+        body['quota_set'].pop('local_gb')
         req = self._get_http_request()
+
         self.controller.update(req, 'update_me', body=body)
+
         self.assertEqual(len(self.default_quotas),
                          len(mock_createlimit.mock_calls))
 
@@ -210,9 +246,11 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self.assertEqual(0,
                          len(mock_createlimit.mock_calls))
 
-    def test_quotas_update_zero_value(self):
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_quotas_update_zero_value(self, microversion):
         body = {'quota_set': {'instances': 0, 'cores': 0,
-                              'ram': 0, 'floating_ips': 0,
+                              'ram': 0, 'local_gb': 0,
+                              'floating_ips': 0,
                               'metadata_items': 0,
                               'injected_files': 0,
                               'injected_file_content_bytes': 0,
@@ -225,7 +263,15 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
             body['quota_set']['server_group_members'] = 10
 
         req = self._get_http_request()
+        if (req.api_version_request > api_version.APIVersionRequest('2.35')):
+            for k in ('floating_ips', 'fixed_ips', 'security_groups',
+                      'security_group_rules'):
+                body['quota_set'].pop(k)
+        if (req.api_version_request < api_version.APIVersionRequest('2.54')):
+            body['quota_set'].pop('local_gb')
+
         res_dict = self.controller.update(req, 'update_me', body=body)
+
         self.assertEqual(body, res_dict)
 
     def _quotas_update_bad_request_case(self, body):
@@ -393,6 +439,7 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
                          len(mock_createlimit.mock_calls))
 
 
+@ddt.ddt
 class UserQuotasTestV21(BaseQuotaSetsTest):
     plugin = quotas_v21
     include_server_group_quotas = True
@@ -401,34 +448,52 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
         super(UserQuotasTestV21, self).setUp()
         self._setup_controller()
 
-    def _get_http_request(self, url=''):
+    def _get_http_request(self, url='', version=None):
+        if version:
+            return fakes.HTTPRequest.blank(url, version=version)
         return fakes.HTTPRequest.blank(url)
 
     def _setup_controller(self):
         self.controller = self.plugin.QuotaSetsController()
 
-    def test_user_quotas_show(self):
-        req = self._get_http_request('/v2/fake4/os-quota-sets/1234?user_id=1')
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_user_quotas_show(self, microversion):
+        url = '/v2/fake4/os-quota-sets/1234?user_id=1'
+        req = self._get_http_request(url, version=microversion)
+
         res_dict = self.controller.show(req, 1234)
+
         ref_quota_set = quota_set('1234', self.include_server_group_quotas)
+        if (req.api_version_request > api_version.APIVersionRequest('2.35')):
+            for k in ('floating_ips', 'fixed_ips', 'security_groups',
+                      'security_group_rules'):
+                ref_quota_set['quota_set'].pop(k, None)
+        if (req.api_version_request < api_version.APIVersionRequest('2.54')):
+            ref_quota_set['quota_set'].pop('local_gb', None)
         self.assertEqual(res_dict, ref_quota_set)
 
-    def test_user_quotas_update(self):
+    @ddt.data('2.1', '2.35', '2.36', '2.53', '2.54')
+    def test_user_quotas_update(self, microversion):
         body = {'quota_set': {'instances': 10, 'cores': 20,
-                              'ram': 51200, 'floating_ips': 10,
-                              'fixed_ips': -1, 'metadata_items': 128,
+                              'ram': 51200,
+                              'metadata_items': 128,
                               'injected_files': 5,
                               'injected_file_content_bytes': 10240,
                               'injected_file_path_bytes': 255,
-                              'security_groups': 10,
-                              'security_group_rules': 20,
                               'key_pairs': 100}}
         if self.include_server_group_quotas:
             body['quota_set']['server_groups'] = 10
             body['quota_set']['server_group_members'] = 10
-
         url = '/v2/fake4/os-quota-sets/update_me?user_id=1'
-        req = self._get_http_request(url)
+        req = self._get_http_request(url, version=microversion)
+        if (req.api_version_request < api_version.APIVersionRequest('2.36')):
+            body['quota_set']['floating_ips'] = 10
+            body['quota_set']['fixed_ips'] = -1
+            body['quota_set']['security_groups'] = 10
+            body['quota_set']['security_group_rules'] = 20
+        if (req.api_version_request > api_version.APIVersionRequest('2.53')):
+            body['quota_set']['local_gb'] = 150
+
         res_dict = self.controller.update(req, 'update_me', body=body)
 
         self.assertEqual(body, res_dict)

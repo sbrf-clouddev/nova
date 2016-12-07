@@ -350,7 +350,7 @@ def convert_objects_related_datetimes(values, *datetime_keys):
 
 
 def _sync_instances(context, project_id, user_id):
-    return dict(zip(('instances', 'cores', 'ram'),
+    return dict(zip(('instances', 'cores', 'ram', 'local_gb'),
                     _instance_data_get_for_user(context, project_id, user_id)))
 
 
@@ -1836,14 +1836,19 @@ def _instance_data_get_for_user(context, project_id, user_id):
     result = model_query(context, models.Instance, (
         func.count(models.Instance.id),
         func.sum(models.Instance.vcpus),
-        func.sum(models.Instance.memory_mb))).\
+        func.sum(models.Instance.memory_mb),
+        func.sum(models.Instance.root_gb),
+        func.sum(models.Instance.ephemeral_gb))).\
         filter_by(project_id=project_id)
     if user_id:
         result = result.filter_by(user_id=user_id).first()
     else:
         result = result.first()
     # NOTE(vish): convert None to 0
-    return (result[0] or 0, result[1] or 0, result[2] or 0)
+    root_gb = result[3] or 0
+    ephemeral_gb = result[4] or 0
+    local_gb = root_gb + ephemeral_gb
+    return (result[0] or 0, result[1] or 0, result[2] or 0, local_gb)
 
 
 @require_context

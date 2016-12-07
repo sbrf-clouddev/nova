@@ -1424,20 +1424,28 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         project_query = context.session.query(
             func.count(models.Instance.id),
             func.sum(models.Instance.vcpus),
-            func.sum(models.Instance.memory_mb)).\
+            func.sum(models.Instance.memory_mb),
+            func.sum(models.Instance.root_gb),
+            func.sum(models.Instance.ephemeral_gb)).\
             filter_by(deleted=0).\
             filter(not_soft_deleted).\
             filter_by(project_id=project_id)
 
         project_result = project_query.first()
-        fields = ('instances', 'cores', 'ram')
+        fields = ('instances', 'cores', 'ram', 'root_gb', 'ephemeral_gb')
         project_counts = {field: int(project_result[idx] or 0)
                           for idx, field in enumerate(fields)}
+        project_counts['local_gb'] = (
+            project_counts.pop('root_gb', 0) +
+            project_counts.pop('ephemeral_gb', 0))
         counts = {'project': project_counts}
         if user_id:
             user_result = project_query.filter_by(user_id=user_id).first()
             user_counts = {field: int(user_result[idx] or 0)
                            for idx, field in enumerate(fields)}
+            user_counts['local_gb'] = (
+                user_counts.pop('root_gb', 0) +
+                user_counts.pop('ephemeral_gb', 0))
             counts['user'] = user_counts
         return counts
 

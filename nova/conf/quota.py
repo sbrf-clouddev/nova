@@ -64,6 +64,16 @@ Possible values:
 * A positive integer or 0.
 * -1 to disable the quota.
 """),
+    cfg.IntOpt('local_gb',
+        default=150,
+        help="""
+Gigabytes of local storage allowed per project.
+
+Possible values:
+
+* A positive integer or 0.
+* -1 to disable the quota.
+"""),
     cfg.IntOpt('floating_ips',
         min=-1,
         default=10,

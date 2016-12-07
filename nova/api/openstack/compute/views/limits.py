@@ -28,6 +28,7 @@ class ViewBuilder(object):
     def __init__(self):
         self.limit_names = {
             "ram": ["maxTotalRAMSize"],
+            "local_gb": ["maxLocalGBSize"],
             "instances": ["maxTotalInstances"],
             "cores": ["maxTotalCores"],
             "key_pairs": ["maxTotalKeypairs"],

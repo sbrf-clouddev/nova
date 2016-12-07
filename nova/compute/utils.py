@@ -642,6 +642,10 @@ def resize_quota_delta(context, new_flavor, old_flavor, sense, compare):
         deltas['cores'] = _quota_delta('vcpus')
     if compare * _quota_delta('memory_mb') > 0:
         deltas['ram'] = _quota_delta('memory_mb')
+    quota_local_gb = (_quota_delta('root_gb') +
+                      _quota_delta('ephemeral_gb'))
+    if compare * quota_local_gb:
+        deltas['local_gb'] = quota_local_gb
 
     return deltas
 
@@ -708,6 +712,15 @@ def get_headroom(quotas, usages, deltas):
         else:
             headroom['ram'] = headroom.get('instances', 1)
 
+    # If quota_local_gb is unlimited [-1]:
+    # - set ram headroom based on instances headroom:
+    if quotas.get('local_gb') == -1:
+        if deltas.get('local_gb'):
+            hr = headroom.get('instances', 1) * deltas['local_gb']
+            headroom['local_gb'] = hr / deltas.get('instances', 1)
+        else:
+            headroom['local_gb'] = headroom.get('instances', 1)
+
     return headroom
 
 
@@ -721,7 +734,14 @@ def check_num_instances_quota(context, instance_type, min_count,
     # Determine requested cores and ram
     req_cores = max_count * instance_type.vcpus
     req_ram = max_count * instance_type.memory_mb
-    deltas = {'instances': max_count, 'cores': req_cores, 'ram': req_ram}
+    req_local_gb = max_count * (
+        instance_type.root_gb + instance_type.ephemeral_gb)
+    deltas = {
+        'instances': max_count,
+        'cores': req_cores,
+        'ram': req_ram,
+        'local_gb': req_local_gb,
+    }
 
     try:
         objects.Quotas.check_deltas(context, deltas,
@@ -738,8 +758,10 @@ def check_num_instances_quota(context, instance_type, min_count,
             # case of a recheck quota, for use in the over quota exception.
             req_cores = orig_num_req * instance_type.vcpus
             req_ram = orig_num_req * instance_type.memory_mb
+            req_local_gb = orig_num_req * (
+                instance_type.root_gb + instance_type.ephemeral_gb)
             requested = {'instances': orig_num_req, 'cores': req_cores,
-                         'ram': req_ram}
+                         'ram': req_ram, 'local_gb': req_local_gb}
             (overs, reqs, total_alloweds, useds) = get_over_quota_detail(
                 deltas, overs, quotas, requested)
             msg = "Cannot run any more instances of this type."
@@ -761,6 +783,9 @@ def check_num_instances_quota(context, instance_type, min_count,
         if instance_type.memory_mb:
             allowed = min(allowed,
                           headroom['ram'] // instance_type.memory_mb)
+        if instance_type.root_gb and instance_type.ephemeral_gb:
+            local_gb = (instance_type.root_gb + instance_type.ephemeral_gb)
+            allowed = min(allowed, headroom['local_gb'] // local_gb)
 
         # Convert to the appropriate exception message
         if allowed <= 0:
@@ -776,7 +801,7 @@ def check_num_instances_quota(context, instance_type, min_count,
         num_instances = (str(min_count) if min_count == max_count else
             "%s-%s" % (min_count, max_count))
         requested = dict(instances=num_instances, cores=req_cores,
-                         ram=req_ram)
+                         ram=req_ram, local_gb=req_local_gb)
         (overs, reqs, total_alloweds, useds) = get_over_quota_detail(
             headroom, overs, quotas, requested)
         params = {'overs': overs, 'pid': project_id,

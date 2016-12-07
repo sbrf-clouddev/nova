@@ -683,3 +683,10 @@ user documentation.
     * ``GET /os-hypervisors/detail``
     * ``GET /os-hypervisors/{hypervisor_id}``
     * ``GET /os-hypervisors/{hypervisor_id}/uptime``
+
+2.54
+----
+
+  Introduce a new quota resouce: 'local_gb'. This resource accounts usage of
+  disks by instance, specifically, it sums root_gb (root disk) and
+  ephemeral_gb (ephemeral storage) based on the instance's flavor.

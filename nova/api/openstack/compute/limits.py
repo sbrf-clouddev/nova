@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.api.openstack import api_version_request
 from nova.api.openstack.api_version_request \
     import MAX_IMAGE_META_PROXY_API_VERSION
 from nova.api.openstack.api_version_request \
@@ -58,6 +59,10 @@ class LimitsController(wsgi.Controller):
         project_id = req.params.get('tenant_id', context.project_id)
         quotas = QUOTAS.get_project_quotas(context, project_id,
                                            usages=False)
+
+        if not api_version_request.is_supported(req, min_version='2.54'):
+            quotas.pop('local_gb', None)
+
         abs_limits = {k: v['limit'] for k, v in quotas.items()}
 
         builder = limits_views.ViewBuilder()

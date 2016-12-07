@@ -29,6 +29,7 @@ quota_resources = {
     'instances': common_quota,
     'cores': common_quota,
     'ram': common_quota,
+    'local_gb': common_quota,
     'floating_ips': common_quota,
     'fixed_ips': common_quota,
     'metadata_items': common_quota,

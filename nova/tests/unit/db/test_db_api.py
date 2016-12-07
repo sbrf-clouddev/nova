@@ -7450,12 +7450,13 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 deltas[resource.name] = i
                 reservable_resources[resource.name] = resource
 
-        usages = {'instances': 3, 'cores': 6, 'ram': 9}
+        usages = {'instances': 3, 'cores': 6, 'ram': 9, 'local_gb': 30}
         instances = []
         for i in range(3):
             instances.append(db.instance_create(self.ctxt,
                              {'vcpus': 2, 'memory_mb': 3,
-                             'project_id': 'project1'}))
+                              'root_gb': 5, 'ephemeral_gb': 5,
+                              'project_id': 'project1'}))
 
         usages['fixed_ips'] = 2
         network = db.network_create_safe(self.ctxt, {})

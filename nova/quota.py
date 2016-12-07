@@ -34,7 +34,6 @@ from nova import utils
 
 LOG = logging.getLogger(__name__)
 
-
 CONF = nova.conf.CONF
 
 
@@ -1878,10 +1877,12 @@ def _instances_cores_ram_count(context, project_id, user_id=None):
 
                 {'project': {'instances': <count across project>,
                              'cores': <count across project>,
-                             'ram': <count across project>},
+                             'ram': <count across project>,
+                             'local_gb': <count across project>},
                  'user': {'instances': <count across user>,
                           'cores': <count across user>,
-                          'ram': <count across user>}}
+                          'ram': <count across user>,
+                          'local_gb': <count across user>}}
     """
     # TODO(melwitt): Counting across cells for instances means we will miss
     # counting resources if a cell is down. In the future, we should query
@@ -1889,9 +1890,21 @@ def _instances_cores_ram_count(context, project_id, user_id=None):
     # deleting InstanceMappings when we delete instances).
     results = nova_context.scatter_gather_all_cells(
         context, objects.InstanceList.get_counts, project_id, user_id=user_id)
-    total_counts = {'project': {'instances': 0, 'cores': 0, 'ram': 0}}
+    total_counts = {
+        'project': {
+            'instances': 0,
+            'cores': 0,
+            'ram': 0,
+            'local_gb': 0,
+        }
+    }
     if user_id:
-        total_counts['user'] = {'instances': 0, 'cores': 0, 'ram': 0}
+        total_counts['user'] = {
+            'instances': 0,
+            'cores': 0,
+            'ram': 0,
+            'local_gb': 0,
+        }
     for cell_uuid, result in results.items():
         if result not in (nova_context.did_not_respond_sentinel,
                           nova_context.raised_exception_sentinel):
@@ -1935,6 +1948,7 @@ resources = [
     CountableResource('instances', _instances_cores_ram_count, 'instances'),
     CountableResource('cores', _instances_cores_ram_count, 'cores'),
     CountableResource('ram', _instances_cores_ram_count, 'ram'),
+    CountableResource('local_gb', _instances_cores_ram_count, 'local_gb'),
     CountableResource('security_groups', _security_group_count,
                       'security_groups'),
     CountableResource('fixed_ips', _fixed_ip_count, 'fixed_ips'),

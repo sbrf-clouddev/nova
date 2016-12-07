@@ -980,7 +980,11 @@ class ComputeUtilsQuotaTestCase(test.TestCase):
 
         expected_deltas = {
             'cores': new_flavor['vcpus'] - old_flavor['vcpus'],
-            'ram': new_flavor['memory_mb'] - old_flavor['memory_mb']
+            'ram': new_flavor['memory_mb'] - old_flavor['memory_mb'],
+            'local_gb': ((new_flavor['root_gb'] -
+                          old_flavor['root_gb']) +
+                         (new_flavor['ephemeral_gb'] -
+                          old_flavor['ephemeral_gb']))
         }
 
         deltas = compute_utils.upsize_quota_delta(self.context, new_flavor,
@@ -996,7 +1000,11 @@ class ComputeUtilsQuotaTestCase(test.TestCase):
             'cores': (inst.new_flavor['vcpus'] -
                       inst.old_flavor['vcpus']),
             'ram': (inst.new_flavor['memory_mb'] -
-                    inst.old_flavor['memory_mb'])
+                    inst.old_flavor['memory_mb']),
+            'local_gb': ((inst.new_flavor['root_gb'] -
+                          inst.old_flavor['root_gb']) +
+                         (inst.new_flavor['ephemeral_gb'] -
+                          inst.old_flavor['ephemeral_gb']))
         }
 
         deltas = compute_utils.downsize_quota_delta(self.context, inst)
@@ -1011,7 +1019,11 @@ class ComputeUtilsQuotaTestCase(test.TestCase):
             'cores': -1 * (inst.new_flavor['vcpus'] -
                            inst.old_flavor['vcpus']),
             'ram': -1 * (inst.new_flavor['memory_mb'] -
-                         inst.old_flavor['memory_mb'])
+                         inst.old_flavor['memory_mb']),
+            'local_gb': -1 * ((inst.new_flavor['root_gb'] -
+                               inst.old_flavor['root_gb']) +
+                              (inst.new_flavor['ephemeral_gb'] -
+                               inst.old_flavor['ephemeral_gb']))
         }
 
         deltas = compute_utils.reverse_upsize_quota_delta(self.context, inst)
@@ -1039,15 +1051,17 @@ class ComputeUtilsQuotaTestCase(test.TestCase):
     @mock.patch('nova.objects.Quotas.count_as_dict')
     def test_check_instance_quota_exceeds_with_multiple_resources(self,
                                                                   mock_count):
-        quotas = {'cores': 1, 'instances': 1, 'ram': 512}
+        quotas = {'cores': 1, 'instances': 1, 'ram': 512, 'local_gb': 150}
         overs = ['cores', 'instances', 'ram']
         over_quota_args = dict(quotas=quotas,
-                               usages={'instances': 1, 'cores': 1, 'ram': 512},
+                               usages={'instances': 1, 'cores': 1, 'ram': 512,
+                                       'local_gb': 1},
                                overs=overs)
         e = exception.OverQuota(**over_quota_args)
-        fake_flavor = objects.Flavor(vcpus=1, memory_mb=512)
+        fake_flavor = objects.Flavor(
+            vcpus=1, memory_mb=512, root_gb=1, ephemeral_gb=0)
         instance_num = 1
-        proj_count = {'instances': 1, 'cores': 1, 'ram': 512}
+        proj_count = {'instances': 1, 'cores': 1, 'ram': 512, 'local_gb': 1}
         user_count = proj_count.copy()
         mock_count.return_value = {'project': proj_count, 'user': user_count}
         with mock.patch.object(objects.Quotas, 'limit_check_project_and_user',

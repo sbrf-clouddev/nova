@@ -169,9 +169,10 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
                       self.fake_show)
 
         # Simulate a race where the first check passes and the recheck fails.
-        fake_quotas = {'instances': 5, 'cores': 10, 'ram': 4096}
-        fake_headroom = {'instances': 5, 'cores': 10, 'ram': 4096}
-        fake_usages = {'instances': 5, 'cores': 10, 'ram': 4096}
+        fake_quotas = {'instances': 5, 'cores': 10, 'ram': 4096, 'local_gb': 9}
+        fake_headroom = {
+            'instances': 5, 'cores': 10, 'ram': 4096, 'local_gb': 9}
+        fake_usages = {'instances': 5, 'cores': 10, 'ram': 4096, 'local_gb': 9}
         exc = exception.OverQuota(overs=['instances'], quotas=fake_quotas,
                                   headroom=fake_headroom, usages=fake_usages)
         check_deltas_mock.side_effect = [None, exc]
@@ -184,14 +185,18 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         project_id = self.context.project_id
 
         self.assertEqual(2, check_deltas_mock.call_count)
-        call1 = mock.call(self.context,
-                          {'instances': 3, 'cores': inst_type.vcpus * 3,
-                           'ram': inst_type.memory_mb * 3},
-                          project_id, user_id=None,
-                          check_project_id=project_id, check_user_id=None)
-        call2 = mock.call(self.context, {'instances': 0, 'cores': 0, 'ram': 0},
-                          project_id, user_id=None,
-                          check_project_id=project_id, check_user_id=None)
+        call1 = mock.call(
+            self.context,
+            {'instances': 3, 'cores': inst_type.vcpus * 3,
+             'ram': inst_type.memory_mb * 3,
+             'local_gb': (inst_type.root_gb + inst_type.ephemeral_gb) * 3},
+            project_id, user_id=None,
+            check_project_id=project_id, check_user_id=None)
+        call2 = mock.call(
+            self.context,
+            {'instances': 0, 'cores': 0, 'ram': 0, 'local_gb': 0},
+            project_id, user_id=None,
+            check_project_id=project_id, check_user_id=None)
         check_deltas_mock.assert_has_calls([call1, call2])
 
         # Verify we removed the artifacts that were added after the first
@@ -229,13 +234,14 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         project_id = self.context.project_id
 
         # check_deltas should have been called only once.
-        check_deltas_mock.assert_called_once_with(self.context,
-                                                  {'instances': 1,
-                                                   'cores': inst_type.vcpus,
-                                                   'ram': inst_type.memory_mb},
-                                                  project_id, user_id=None,
-                                                  check_project_id=project_id,
-                                                  check_user_id=None)
+        check_deltas_mock.assert_called_once_with(
+            self.context,
+            {'instances': 1,
+             'cores': inst_type.vcpus,
+             'ram': inst_type.memory_mb,
+             'local_gb': inst_type.root_gb + inst_type.ephemeral_gb},
+            project_id, user_id=None, check_project_id=project_id,
+            check_user_id=None)
 
     @mock.patch.object(compute_api.API, '_local_delete')
     @mock.patch.object(compute_api.API, '_lookup_instance',

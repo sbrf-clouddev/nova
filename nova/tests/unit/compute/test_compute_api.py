@@ -889,7 +889,8 @@ class _ComputeAPIUnitTestMixIn(object):
         inst._context = self.context
         deltas = {'instances': -1,
                   'cores': -inst.flavor.vcpus,
-                  'ram': -inst.flavor.memory_mb}
+                  'ram': -inst.flavor.memory_mb,
+                  'local_gb': -(inst.root_gb + inst.ephemeral_gb)}
         delete_time = datetime.datetime(1955, 11, 5, 9, 30,
                                         tzinfo=iso8601.iso8601.Utc())
         self.useFixture(utils_fixture.TimeFixture(delete_time))
@@ -1662,7 +1663,10 @@ class _ComputeAPIUnitTestMixIn(object):
                     mox.IsA(objects.Flavor)).AndReturn({'cores': 0, 'ram': 0})
 
                 proj_count = {'instances': 1, 'cores': current_flavor.vcpus,
-                              'ram': current_flavor.memory_mb}
+                              'ram': current_flavor.memory_mb,
+                              'local_gb': (
+                                  current_flavor.root_gb +
+                                  current_flavor.ephemeral_gb)}
                 user_count = proj_count.copy()
                 # mox.IgnoreArg() might be 'instances', 'cores', or 'ram'
                 # depending on how the deltas dict is iterated in check_deltas
@@ -1674,7 +1678,13 @@ class _ComputeAPIUnitTestMixIn(object):
                 # The current and new flavor have the same cores/ram
                 req_cores = current_flavor.vcpus
                 req_ram = current_flavor.memory_mb
-                values = {'cores': req_cores, 'ram': req_ram}
+                req_local_gb = (
+                    current_flavor.root_gb + current_flavor.ephemeral_gb)
+                values = {
+                    'cores': req_cores,
+                    'ram': req_ram,
+                    'local_gb': req_local_gb,
+                }
                 quotas_obj.Quotas.limit_check_project_and_user(
                     self.context, user_values=values, project_values=values,
                     project_id=project_id, user_id=user_id)
@@ -1783,29 +1793,32 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_resize_quota_check(self, mock_check, mock_count, mock_get):
         self.flags(cores=1, group='quota')
         self.flags(ram=2048, group='quota')
-        proj_count = {'instances': 1, 'cores': 1, 'ram': 1024}
+        proj_count = {'instances': 1, 'cores': 1, 'ram': 1024, 'local_gb': 128}
         user_count = proj_count.copy()
         mock_count.return_value = {'project': proj_count,
                                    'user': user_count}
 
-        cur_flavor = objects.Flavor(id=1, name='foo', vcpus=1, memory_mb=512,
-                                    root_gb=10, disabled=False)
+        cur_flavor = objects.Flavor(
+            id=1, name='foo', vcpus=1, memory_mb=512,
+            root_gb=10, ephemeral_gb=118, disabled=False)
         fake_inst = self._create_instance_obj()
         fake_inst.flavor = cur_flavor
-        new_flavor = objects.Flavor(id=2, name='bar', vcpus=1, memory_mb=2048,
-                                    root_gb=10, disabled=False)
+        new_flavor = objects.Flavor(
+            id=2, name='bar', vcpus=1, memory_mb=2048,
+            root_gb=10, ephemeral_gb=118, disabled=False)
         mock_get.return_value = new_flavor
         mock_check.side_effect = exception.OverQuota(
                 overs=['ram'], quotas={'cores': 1, 'ram': 2048},
-                usages={'instances': 1, 'cores': 1, 'ram': 2048},
+                usages={'instances': 1, 'cores': 1, 'ram': 2048,
+                        'local_gb': 120},
                 headroom={'ram': 2048})
 
         self.assertRaises(exception.TooManyInstances, self.compute_api.resize,
                           self.context, fake_inst, flavor_id='new')
         mock_check.assert_called_once_with(
                 self.context,
-                user_values={'cores': 1, 'ram': 2560},
-                project_values={'cores': 1, 'ram': 2560},
+                user_values={'cores': 1, 'ram': 2560, 'local_gb': 128},
+                project_values={'cores': 1, 'ram': 2560, 'local_gb': 128},
                 project_id=fake_inst.project_id, user_id=fake_inst.user_id)
 
     def test_migrate(self):
@@ -1890,18 +1903,21 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch('nova.compute.api.API._record_action_start')
     @mock.patch('nova.compute.api.API._resize_cells_support')
     @mock.patch('nova.conductor.conductor_api.ComputeTaskAPI.resize_instance')
+    @mock.patch('nova.objects.quotas.Quotas.check_deltas')
     @mock.patch.object(flavors, 'get_flavor_by_flavor_id')
     def test_resize_to_zero_disk_flavor_volume_backed(self,
                                                       get_flavor_by_flavor_id,
+                                                      check_deltas_mock,
                                                       resize_instance_mock,
                                                       cells_support_mock,
                                                       record_mock,
                                                       get_by_inst):
-        params = dict(image_ref='')
+        params = dict(image_ref='', root_gb=1)
         fake_inst = self._create_instance_obj(params=params)
 
-        fake_flavor = self._create_flavor(id=200, flavorid='flavor-id',
-                                          name='foo', root_gb=0)
+        fake_flavor = self._create_flavor(
+            id=200, flavorid='flavor-id', name='foo',
+            root_gb=0, ephemeral_gb=0)
 
         get_flavor_by_flavor_id.return_value = fake_flavor
 
@@ -1912,6 +1928,11 @@ class _ComputeAPIUnitTestMixIn(object):
             self.compute_api.resize(self.context, fake_inst,
                                     flavor_id='flavor-id')
             mock_volume.assert_called_once_with(self.context, fake_inst)
+            check_deltas_mock.assert_called_once_with(
+                self.context, {'cores': 0, 'ram': 0, 'local_gb': -1},
+                fake_inst.project_id, user_id=fake_inst.user_id,
+                check_project_id=fake_inst.project_id,
+                check_user_id=fake_inst.user_id)
 
         do_test()
 
@@ -1931,18 +1952,19 @@ class _ComputeAPIUnitTestMixIn(object):
                             name='foo', disabled=False)
         flavors.get_flavor_by_flavor_id(
                 'flavor-id', read_deleted='no').AndReturn(fake_flavor)
-        deltas = dict(cores=0)
+        deltas = dict(cores=0, local_gb=0)
         compute_utils.upsize_quota_delta(
             self.context, mox.IsA(objects.Flavor),
             mox.IsA(objects.Flavor)).AndReturn(deltas)
-        quotas = {'cores': 0}
+        quotas = {'cores': 0, 'local_gb': 150}
         overs = ['cores']
         over_quota_args = dict(quotas=quotas,
-                               usages={'instances': 1, 'cores': 1, 'ram': 512},
+                               usages={'instances': 1, 'cores': 1, 'ram': 512,
+                                       'local_gb': 1},
                                overs=overs)
 
         proj_count = {'instances': 1, 'cores': fake_inst.flavor.vcpus,
-                      'ram': fake_inst.flavor.memory_mb}
+                      'ram': fake_inst.flavor.memory_mb, 'local_gb': 1}
         user_count = proj_count.copy()
         # mox.IgnoreArg() might be 'instances', 'cores', or 'ram'
         # depending on how the deltas dict is iterated in check_deltas
@@ -1953,7 +1975,7 @@ class _ComputeAPIUnitTestMixIn(object):
                                              'user': user_count})
         req_cores = fake_inst.flavor.vcpus
         req_ram = fake_inst.flavor.memory_mb
-        values = {'cores': req_cores, 'ram': req_ram}
+        values = {'cores': req_cores, 'ram': req_ram, 'local_gb': 1}
         quotas_obj.Quotas.limit_check_project_and_user(
             self.context, user_values=values, project_values=values,
             project_id=fake_inst.project_id,
@@ -3228,16 +3250,18 @@ class _ComputeAPIUnitTestMixIn(object):
             self._test_check_injected_file_quota_onset_file_limit_exceeded,
             side_effect)
 
+    @ddt.data(True, False)
     @mock.patch('nova.objects.Quotas.count_as_dict')
     @mock.patch('nova.objects.Quotas.limit_check_project_and_user')
     @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstanceAction.action_start')
-    def test_restore_by_admin(self, action_start, instance_save,
-                              quota_check, quota_count):
-        admin_context = context.RequestContext('admin_user',
-                                               'admin_project',
-                                               True)
-        proj_count = {'instances': 1, 'cores': 1, 'ram': 512}
+    def test_restore(self, is_admin, action_start, instance_save,
+                     quota_check, quota_count):
+        if is_admin:
+            ctxt = context.RequestContext('admin_user', 'admin_project', True)
+        else:
+            ctxt = self.context
+        proj_count = {'instances': 1, 'cores': 1, 'ram': 512, 'local_gb': 1024}
         user_count = proj_count.copy()
         quota_count.return_value = {'project': proj_count, 'user': user_count}
         instance = self._create_instance_obj()
@@ -3245,57 +3269,27 @@ class _ComputeAPIUnitTestMixIn(object):
         instance.task_state = None
         instance.save()
         with mock.patch.object(self.compute_api, 'compute_rpcapi') as rpc:
-            self.compute_api.restore(admin_context, instance)
-            rpc.restore_instance.assert_called_once_with(admin_context,
-                                                         instance)
+            self.compute_api.restore(ctxt, instance)
+            rpc.restore_instance.assert_called_once_with(ctxt, instance)
         self.assertEqual(instance.task_state, task_states.RESTORING)
-        # mock.ANY might be 'instances', 'cores', or 'ram' depending on how the
-        # deltas dict is iterated in check_deltas
-        quota_count.assert_called_once_with(admin_context, mock.ANY,
+        # mock.ANY might be 'instances', 'cores', 'ram' or 'local_gb'
+        # depending on how the deltas dict is iterated in check_deltas
+        quota_count.assert_called_once_with(ctxt, mock.ANY,
                                             instance.project_id,
                                             user_id=instance.user_id)
+        expected_values = {
+            'instances': proj_count['instances'] + 1,
+            'cores': proj_count['cores'] + instance.flavor.vcpus,
+            'ram': proj_count['ram'] + instance.flavor.memory_mb,
+            'local_gb': (
+                proj_count['local_gb'] +
+                instance.flavor.root_gb +
+                instance.flavor.ephemeral_gb),
+        }
         quota_check.assert_called_once_with(
-            admin_context,
-            user_values={'instances': 2,
-                         'cores': 1 + instance.flavor.vcpus,
-                         'ram': 512 + instance.flavor.memory_mb},
-            project_values={'instances': 2,
-                            'cores': 1 + instance.flavor.vcpus,
-                            'ram': 512 + instance.flavor.memory_mb},
-            project_id=instance.project_id, user_id=instance.user_id)
-
-    @mock.patch('nova.objects.Quotas.count_as_dict')
-    @mock.patch('nova.objects.Quotas.limit_check_project_and_user')
-    @mock.patch('nova.objects.Instance.save')
-    @mock.patch('nova.objects.InstanceAction.action_start')
-    def test_restore_by_instance_owner(self, action_start, instance_save,
-                                       quota_check, quota_count):
-        proj_count = {'instances': 1, 'cores': 1, 'ram': 512}
-        user_count = proj_count.copy()
-        quota_count.return_value = {'project': proj_count, 'user': user_count}
-        instance = self._create_instance_obj()
-        instance.vm_state = vm_states.SOFT_DELETED
-        instance.task_state = None
-        instance.save()
-        with mock.patch.object(self.compute_api, 'compute_rpcapi') as rpc:
-            self.compute_api.restore(self.context, instance)
-            rpc.restore_instance.assert_called_once_with(self.context,
-                                                         instance)
-        self.assertEqual(instance.project_id, self.context.project_id)
-        self.assertEqual(instance.task_state, task_states.RESTORING)
-        # mock.ANY might be 'instances', 'cores', or 'ram' depending on how the
-        # deltas dict is iterated in check_deltas
-        quota_count.assert_called_once_with(self.context, mock.ANY,
-                                            instance.project_id,
-                                            user_id=instance.user_id)
-        quota_check.assert_called_once_with(
-            self.context,
-            user_values={'instances': 2,
-                         'cores': 1 + instance.flavor.vcpus,
-                         'ram': 512 + instance.flavor.memory_mb},
-            project_values={'instances': 2,
-                            'cores': 1 + instance.flavor.vcpus,
-                            'ram': 512 + instance.flavor.memory_mb},
+            ctxt,
+            user_values=expected_values,
+            project_values=expected_values,
             project_id=instance.project_id, user_id=instance.user_id)
 
     @mock.patch.object(objects.InstanceAction, 'action_start')

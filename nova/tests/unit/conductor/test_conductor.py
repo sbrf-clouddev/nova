@@ -1708,7 +1708,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         project_id = self.params['context'].project_id
         mock_check.assert_called_once_with(
-            self.params['context'], {'instances': 0, 'cores': 0, 'ram': 0},
+            self.params['context'],
+            {'instances': 0, 'cores': 0, 'ram': 0, 'local_gb': 0},
             project_id, user_id=None, check_project_id=project_id,
             check_user_id=None)
 

@@ -8418,13 +8418,15 @@ class ComputeAPITestCase(BaseTestCase):
         # check_deltas should have been called only once for server group
         # members.
         self.assertEqual(2, check_deltas_mock.call_count)
-        call1 = mock.call(self.context, {'instances': 1,
-                                         'cores': inst_type.vcpus,
-                                         'ram': inst_type.memory_mb},
-                          self.context.project_id,
-                          user_id=None,
-                          check_project_id=self.context.project_id,
-                          check_user_id=None)
+        call1 = mock.call(
+            self.context,
+            {'instances': 1, 'cores': inst_type.vcpus,
+             'ram': inst_type.memory_mb,
+             'local_gb': inst_type.root_gb + inst_type.ephemeral_gb},
+            self.context.project_id,
+            user_id=None,
+            check_project_id=self.context.project_id,
+            check_user_id=None)
         call2 = mock.call(self.context, {'server_group_members': 1}, group,
                           self.context.user_id)
         check_deltas_mock.assert_has_calls([call1, call2])
