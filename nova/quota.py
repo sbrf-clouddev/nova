@@ -23,12 +23,18 @@ from oslo_log import log as logging
 from oslo_utils import importutils
 from oslo_utils import timeutils
 import six
+import webob
+
+from keystoneauth1.identity.generic import password
+from keystoneauth1 import session as ks_session
+from keystoneclient import client as kc_client
+from keystoneclient import exceptions as kc_exceptions
 
 import nova.conf
 from nova import context as nova_context
 from nova import db
 from nova import exception
-from nova.i18n import _LE
+from nova.i18n import _, _LE
 from nova import objects
 from nova import utils
 
@@ -913,6 +919,87 @@ class DbQuotaDriver(object):
         """
 
         db.reservation_expire(context)
+
+
+class OverbookingDbQuotaDriver(DbQuotaDriver):
+
+    def reserve(self, context, resources, deltas, expire=None,
+                project_id=None, user_id=None):
+
+        self.check_domain_usage(context, resources, deltas,
+                                project_id=project_id)
+
+        return super(OverbookingDbQuotaDriver, self).reserve(
+            context, resources, deltas,
+            expire=expire, project_id=project_id, user_id=user_id)
+
+    def check_domain_usage(self, context, resources, deltas, project_id=None):
+        """Check estimated domain usage against actual domain quotas."""
+
+        domain_id, neighbours = get_project_neighbours(context,
+                                                       project_id=project_id)
+
+        neighbours_ids = [n.id for n in neighbours]
+
+        domain_quotas = db.quota_get_all_by_project(context, domain_id)
+
+        LOG.debug('Quota limits for domain %(domain_id)s: '
+                  '%(domain_quotas)s', {'domain_id': domain_id,
+                                        'domain_quotas': domain_quotas})
+
+        quotas = self._get_quotas(context, resources, deltas.keys(),
+                                  has_sync=True, project_id=domain_id,
+                                  project_quotas=domain_quotas)
+        LOG.debug('Quotas for domain %(domain_id)s after resource sync: '
+                  '%(quotas)s', {'domain_id': domain_id, 'quotas': quotas})
+
+        db.quota_domain_usage_check(context, quotas, deltas, domain_id,
+                                    neighbours_ids)
+
+    def get_settable_quotas(self, context, resources, project_id,
+                            user_id=None):
+        """Given a list of resources, retrieve the range of settable quotas for
+        the given user or project.
+
+        :param context: The request context, for access checks.
+        :param resources: A dictionary of the registered resources.
+        :param project_id: The ID of the project to return quotas for.
+        :param user_id: The ID of the user to return quotas for.
+        """
+        # step 1: get settable quotas for project as usual
+        settable_quotas = super(
+            OverbookingDbQuotaDriver, self).get_settable_quotas(
+            context, resources, project_id, user_id)
+
+        # step 2: define that we do not specify quotas for users
+        if user_id is None:
+
+            # step 3 request domain_id if domain_id is None or project
+            # was not found then we specify quotas for domains
+            ks = _keystone_client(context, version=(3, 0), require_admin=True)
+            domain_id = None
+            try:
+                domain_id = ks.projects.get(project_id).domain_id
+            except kc_exceptions.NotFound:
+                pass
+
+            # step 3: requests domain quotas and set it as upper limit
+            if domain_id:
+                LOG.debug("Requesting domain quotas for project %(project)s",
+                          {'project': project_id})
+                domain_quotas = self.get_project_quotas(
+                    context=context, resources=resources,
+                    project_id=domain_id, usages=False)
+                for n, q in six.iteritems(settable_quotas):
+                    if q['maximum'] == self.UNLIMITED_VALUE:
+                        # if no maximum value was set
+                        settable_quotas[n]['maximum'] = (
+                            domain_quotas[n]['limit']
+                            if n in domain_quotas else self.UNLIMITED_VALUE)
+                LOG.debug("Requested maximum quotas from domain %(domain)s "
+                          "for project %(project)s.",
+                          {'domain': domain_id, 'project': project_id})
+        return settable_quotas
 
 
 class NoopQuotaDriver(object):
@@ -1981,3 +2068,49 @@ def _valid_method_call_check_resources(resource_values, method, resources):
 
     for name in resource_values.keys():
         _valid_method_call_check_resource(name, method, resources)
+
+
+def get_project_neighbours(context, project_id=None):
+    """Get project's domain and return all projects within this domain."""
+
+    if project_id is None:
+        project_id = context.project_id
+
+    try:
+        LOG.debug("Getting neighbours for project = %s", project_id)
+        keystone = _keystone_client(context, version=(3, 0),
+                                    require_admin=True)
+        project = keystone.projects.get(project_id)
+
+        domain_id = project.domain_id
+
+        neighbours = keystone.projects.list(domain=domain_id)
+
+        LOG.debug("Neighbours for project = %(project_id)s "
+                  "in domain = %(domain_id)s were found",
+                  {'project_id': project_id, 'domain_id': domain_id})
+        return domain_id, neighbours
+    except kc_exceptions.NotFound:
+        msg = (_("Project ID: %s does not exist.") % project_id)
+        raise webob.exc.HTTPNotFound(explanation=msg)
+
+
+def _keystone_client(context, version=(3, 0), require_admin=False):
+    """Creates and returns an instance of a generic keystone client.
+
+    :return: keystoneclient.client.Client object
+    """
+
+    if require_admin and not context.is_admin:
+        auth = password.Password(
+            auth_url=CONF.keystone_authtoken.auth_uri,
+            username=CONF.keystone_authtoken.admin_user,
+            password=CONF.keystone_authtoken.admin_password,
+            project_name=CONF.keystone_authtoken.admin_tenant_name)
+    else:
+        auth = context.get_auth_plugin()
+
+    sess = ks_session.Session(auth=auth)
+
+    return kc_client.Client(auth_url=CONF.keystone_authtoken.auth_uri,
+                            session=sess, version=version)

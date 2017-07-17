@@ -7589,6 +7589,51 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertRaises(exception.QuotaExists, db.quota_create, self.ctxt,
                           'project1', 'resource1', 42)
 
+    @mock.patch('nova.db.sqlalchemy.api._get_quota_usages_aggregate')
+    def test_quota_domain_usage_check(self, fake_get_quota_usages_aggregate):
+        fake_get_quota_usages_aggregate.return_value = {
+            'resource1': {'in_use': 5, 'reserved': 1},
+            'resource2': {'in_use': 10, 'reserved': 5}
+        }
+
+        quotas = {'resource1': 10, 'resource2': 20}
+        deltas = {'resource1': 2, 'resource2': 2}
+        neighbours_ids = ['project_id_1', 'project_id_2']
+
+        db.quota_domain_usage_check(self.ctxt, quotas, deltas, 'default',
+                                    neighbours_ids)
+
+        fake_get_quota_usages_aggregate.assert_called_once_with(
+            self.ctxt, neighbours_ids)
+
+    @mock.patch('nova.db.sqlalchemy.api._get_quota_usages_aggregate')
+    def test_quota_domain_usage_check_over_limit(
+            self, fake_get_quota_usages_aggregate):
+        fake_get_quota_usages_aggregate.return_value = {
+            'resource1': {'in_use': 9, 'reserved': 1},
+            'resource2': {'in_use': 10, 'reserved': 3}
+        }
+
+        quotas = {'resource1': 10, 'resource2': 20}
+        deltas = {'resource1': 2, 'resource2': 2}
+        neighbours_ids = ['project_id_1', 'project_id_2']
+
+        raised_exc = self.assertRaises(
+            exception.OverQuota, db.quota_domain_usage_check,
+            self.ctxt, quotas, deltas, 'default', neighbours_ids)
+
+        self.assertEqual(['resource1'], raised_exc.kwargs['overs'])
+
+        fake_get_quota_usages_aggregate.assert_called_once_with(
+            self.ctxt, neighbours_ids)
+
+    def test_get_quota_usages_aggregate(self):
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            with mock.patch.object(query.Query, 'group_by') as group_mock:
+                sqlalchemy_api._get_quota_usages_aggregate(
+                    self.ctxt, ['project_id_1', 'project_id_2'])
+        self.assertTrue(group_mock.called)
+
 
 class QuotaReserveNoDbTestCase(test.NoDBTestCase):
     """Tests quota reserve/refresh operations using mock."""

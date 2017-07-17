@@ -1229,6 +1229,12 @@ def quota_usage_refresh(context, resources, keys, until_refresh, max_age,
 ###################
 
 
+def quota_domain_usage_check(context, quotas, deltas,
+                             domain_id, neighbours_ids):
+    return IMPL.quota_domain_usage_check(context, quotas, deltas,
+                                         domain_id, neighbours_ids)
+
+
 def quota_reserve(context, resources, quotas, user_quotas, deltas, expire,
                   until_refresh, max_age, project_id=None, user_id=None):
     """Check quotas and create appropriate reservations."""

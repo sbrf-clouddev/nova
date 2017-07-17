@@ -15,8 +15,12 @@
 #    under the License.
 
 import mock
+from oslo_config import fixture as config_fixture
 from oslo_db.sqlalchemy import enginefacade
 from six.moves import range
+import webob
+
+from keystoneclient import exceptions as kc_exceptions
 
 from nova import compute
 from nova.compute import flavors
@@ -855,9 +859,9 @@ class QuotaEngineTestCase(test.TestCase):
                           'test_resource3', 'test_resource4'])
 
 
-class DbQuotaDriverTestCase(test.TestCase):
+class DbQuotaDriverBaseTestCase(test.TestCase):
     def setUp(self):
-        super(DbQuotaDriverTestCase, self).setUp()
+        super(DbQuotaDriverBaseTestCase, self).setUp()
 
         self.flags(instances=10,
                    cores=20,
@@ -878,11 +882,99 @@ class DbQuotaDriverTestCase(test.TestCase):
                    group='quota'
                    )
 
+        self.useFixture(test.TimeOverride())
+
+    def _stub_get_project_quotas(self):
+        def fake_get_project_quotas(dbdrv, context, resources, project_id,
+                                    quota_class=None, defaults=True,
+                                    usages=True, remains=False,
+                                    project_quotas=None):
+            self.calls.append('get_project_quotas')
+            return {k: dict(limit=v.default) for k, v in resources.items()}
+
+        self.stub_out('nova.quota.DbQuotaDriver.get_project_quotas',
+                       fake_get_project_quotas)
+
+    def _stub_quota_reserve(self):
+        def fake_quota_reserve(context, resources, quotas, user_quotas, deltas,
+                               expire, until_refresh, max_age, project_id=None,
+                               user_id=None):
+            self.calls.append(('quota_reserve', expire, until_refresh,
+                               max_age))
+            return ['resv-1', 'resv-2', 'resv-3']
+        self.stub_out('nova.db.quota_reserve', fake_quota_reserve)
+
+    def _stub_get_settable_quotas(self):
+
+        def fake_quota_get_all_by_project(context, project_id):
+            self.calls.append('quota_get_all_by_project')
+            return {'floating_ips': 20}
+
+        def fake_get_project_quotas(dbdrv, context, resources, project_id,
+                                    quota_class=None, defaults=True,
+                                    usages=True, remains=False,
+                                    project_quotas=None):
+            self.calls.append('get_project_quotas')
+            result = {}
+            for k, v in resources.items():
+                limit = v.default
+                if k == 'instances':
+                    remains = v.default - 5
+                    in_use = 1
+                elif k == 'cores':
+                    remains = -1
+                    in_use = 5
+                    limit = -1
+                elif k == 'floating_ips':
+                    remains = 20
+                    in_use = 0
+                    limit = 20
+                else:
+                    remains = v.default
+                    in_use = 0
+                result[k] = {'limit': limit, 'in_use': in_use,
+                             'remains': remains}
+            return result
+
+        def fake_process_quotas_in_get_user_quotas(dbdrv, context, resources,
+                                                   project_id, quotas,
+                                                   quota_class=None,
+                                                   defaults=True, usages=None,
+                                                   remains=False):
+            self.calls.append('_process_quotas')
+            result = {}
+            for k, v in resources.items():
+                if k == 'instances':
+                    in_use = 1
+                elif k == 'cores':
+                    in_use = 15
+                else:
+                    in_use = 0
+                result[k] = {'limit': v.default,
+                             'in_use': in_use}
+            return result
+
+        def fake_qgabpau(context, project_id, user_id):
+            self.calls.append('quota_get_all_by_project_and_user')
+            return {'instances': 2, 'cores': -1}
+
+        self.stub_out('nova.db.quota_get_all_by_project',
+                       fake_quota_get_all_by_project)
+        self.stub_out('nova.quota.DbQuotaDriver.get_project_quotas',
+                       fake_get_project_quotas)
+        self.stub_out('nova.quota.DbQuotaDriver._process_quotas',
+                       fake_process_quotas_in_get_user_quotas)
+        self.stub_out('nova.db.quota_get_all_by_project_and_user',
+                       fake_qgabpau)
+
+
+class DbQuotaDriverTestCase(DbQuotaDriverBaseTestCase):
+    def setUp(self):
+        super(DbQuotaDriverTestCase, self).setUp()
+
         self.driver = quota.DbQuotaDriver()
 
         self.calls = []
-
-        self.useFixture(test.TimeOverride())
 
     def test_get_defaults(self):
         # Use our pre-defined resources
@@ -1942,69 +2034,6 @@ class DbQuotaDriverTestCase(test.TestCase):
                     ),
                 ))
 
-    def _stub_get_settable_quotas(self):
-
-        def fake_quota_get_all_by_project(context, project_id):
-            self.calls.append('quota_get_all_by_project')
-            return {'floating_ips': 20}
-
-        def fake_get_project_quotas(dbdrv, context, resources, project_id,
-                                    quota_class=None, defaults=True,
-                                    usages=True, remains=False,
-                                    project_quotas=None):
-            self.calls.append('get_project_quotas')
-            result = {}
-            for k, v in resources.items():
-                limit = v.default
-                if k == 'instances':
-                    remains = v.default - 5
-                    in_use = 1
-                elif k == 'cores':
-                    remains = -1
-                    in_use = 5
-                    limit = -1
-                elif k == 'floating_ips':
-                    remains = 20
-                    in_use = 0
-                    limit = 20
-                else:
-                    remains = v.default
-                    in_use = 0
-                result[k] = {'limit': limit, 'in_use': in_use,
-                             'remains': remains}
-            return result
-
-        def fake_process_quotas_in_get_user_quotas(dbdrv, context, resources,
-                                                   project_id, quotas,
-                                                   quota_class=None,
-                                                   defaults=True, usages=None,
-                                                   remains=False):
-            self.calls.append('_process_quotas')
-            result = {}
-            for k, v in resources.items():
-                if k == 'instances':
-                    in_use = 1
-                elif k == 'cores':
-                    in_use = 15
-                else:
-                    in_use = 0
-                result[k] = {'limit': v.default,
-                             'in_use': in_use}
-            return result
-
-        def fake_qgabpau(context, project_id, user_id):
-            self.calls.append('quota_get_all_by_project_and_user')
-            return {'instances': 2, 'cores': -1}
-
-        self.stub_out('nova.db.quota_get_all_by_project',
-                       fake_quota_get_all_by_project)
-        self.stub_out('nova.quota.DbQuotaDriver.get_project_quotas',
-                       fake_get_project_quotas)
-        self.stub_out('nova.quota.DbQuotaDriver._process_quotas',
-                       fake_process_quotas_in_get_user_quotas)
-        self.stub_out('nova.db.quota_get_all_by_project_and_user',
-                       fake_qgabpau)
-
     def test_get_settable_quotas_with_user(self):
         self._stub_get_settable_quotas()
         result = self.driver.get_settable_quotas(
@@ -2485,3 +2514,197 @@ class NoopQuotaDriverTestCase(test.TestCase):
                                                  quota.QUOTAS._resources,
                                                  'test_project')
         self.assertEqual(self.expected_settable_quotas, result)
+
+
+class FakeProject(object):
+    def __init__(self, id, domain_id='default'):
+        self.id = id
+        self.domain_id = domain_id
+
+
+class OverbookingDbQuotaDriverTestCase(DbQuotaDriverBaseTestCase):
+    def setUp(self):
+        super(OverbookingDbQuotaDriverTestCase, self).setUp()
+
+        self.driver = quota.OverbookingDbQuotaDriver()
+
+        self.calls = []
+
+    def test_reserve(self):
+
+        def fake_check_domain_usage(dbdrv, context, resources, deltas,
+                                    project_id=None):
+            self.calls.append('check_domain_usage')
+
+        self.stub_out(
+            'nova.quota.OverbookingDbQuotaDriver.check_domain_usage',
+            fake_check_domain_usage)
+        self._stub_get_project_quotas()
+        self._stub_quota_reserve()
+
+        result = self.driver.reserve(
+            FakeContext('test_project', 'test_class'),
+            quota.QUOTAS._resources, dict(instances=2))
+
+        # calculate default expire
+        expire = timeutils.utcnow() + datetime.timedelta(
+            seconds=CONF.quota.reservation_expire)
+
+        self.assertEqual(self.calls,
+                         ['check_domain_usage', 'get_project_quotas',
+                          ('quota_reserve', expire, 0, 0)])
+
+        self.assertEqual(result, ['resv-1', 'resv-2', 'resv-3'])
+
+    def test_reserve_over_limit(self):
+
+        def fake_get_project_neighbours(context, project_id=None):
+            self.calls.append('get_project_neighbours')
+            return ('default',
+                    [FakeProject('project_id_%s' % i, 'default')
+                     for i in range(5)])
+
+        self.stub_out('nova.quota.get_project_neighbours',
+                      fake_get_project_neighbours)
+        self._stub_get_project_quotas()
+
+        def fake_quota_domain_usage_check(context, quotas, deltas, domain_id,
+                                          neighbours_ids):
+            self.calls.append('nova.db.quota_domain_usage_check')
+            raise exception.OverQuota(overs=['instances'])
+
+        self.stub_out('nova.db.quota_domain_usage_check',
+                      fake_quota_domain_usage_check)
+
+        raised_exc = self.assertRaises(
+            exception.OverQuota,
+            self.driver.reserve,
+            FakeContext('test_project', 'test_class'),
+            quota.QUOTAS._resources,
+            dict(instances=2))
+
+        self.assertEqual(['instances'], raised_exc.kwargs['overs'])
+        self.assertEqual(self.calls, ['get_project_neighbours',
+                                      'get_project_quotas',
+                                      'nova.db.quota_domain_usage_check'])
+
+    @mock.patch('nova.quota._keystone_client')
+    def test_domain_quotas_restrict_project_quotas(self, ks_get_method):
+        client = mock.MagicMock()
+        ks_get_method.return_value = client
+        client.projects.get.return_value = mock.MagicMock(
+            domain_id="test_domain")
+        context = FakeContext('test_project', 'test_class')
+        context.domain = 'test_domain'
+        self._stub_get_settable_quotas()
+        result = self.driver.get_settable_quotas(
+            context=context, resources=quota.QUOTAS._resources,
+            project_id='test_project')
+        client.projects.get.assert_called_once_with('test_project')
+        self.assertEqual(['quota_get_all_by_project',
+                          'get_project_quotas',
+                          'get_project_quotas'], self.calls)
+        self.assertEqual(20, result['floating_ips']['maximum'])
+        self.assertEqual(-1, result['cores']['maximum'])
+
+    @mock.patch('nova.quota._keystone_client')
+    def test_domain_settable_quotas(self, ks_get_method):
+        ksc = mock.MagicMock()
+        ks_get_method.return_value = ksc
+        ksc.projects.get.side_effect = kc_exceptions.NotFound()
+        context = FakeContext('test_project', 'test_class')
+        context.domain = 'test_domain'
+        self._stub_get_settable_quotas()
+        result = self.driver.get_settable_quotas(
+            context=context, resources=quota.QUOTAS._resources,
+            project_id='test_project')
+        self.assertEqual(['quota_get_all_by_project', 'get_project_quotas'],
+                         self.calls)
+        self.assertEqual(-1, result['floating_ips']['maximum'])
+        self.assertEqual(-1, result['cores']['maximum'])
+
+
+class KeystoneMethodsTestCase(test.TestCase):
+
+    def setUp(self):
+        super(KeystoneMethodsTestCase, self).setUp()
+
+        self.useFixture(config_fixture.Config(CONF))
+        self.user_context = context.RequestContext('fake_user_id',
+                                                   'fake_project_id',
+                                                   is_admin=False)
+        self.admin_context = context.RequestContext('fake_admin_id',
+                                                    'fake_project_id',
+                                                    is_admin=True)
+
+    @mock.patch('keystoneauth1.identity.generic.password.Password')
+    @mock.patch('keystoneauth1.session.Session')
+    @mock.patch('keystoneclient.client.Client')
+    def test_keystone_client_user_context_admin_required(
+            self, kc_class, ks_session, ks_password):
+
+        quota._keystone_client(self.user_context,
+                               version=(3, 0),
+                               require_admin=True)
+
+        ks_password.assert_called_once_with(
+            auth_url=CONF.keystone_authtoken.auth_uri,
+            username=CONF.keystone_authtoken.admin_user,
+            password=CONF.keystone_authtoken.admin_password,
+            project_name=CONF.keystone_authtoken.admin_tenant_name)
+
+        kc_class.assert_called_once_with(
+            auth_url=CONF.keystone_authtoken.auth_uri,
+            session=ks_session(),
+            version=(3, 0))
+
+    @mock.patch('keystoneauth1.session.Session')
+    @mock.patch('keystoneclient.client.Client')
+    @mock.patch('keystoneauth1.identity.generic.password.Password')
+    def test_keystone_client_admin_context(self, ks_password, kc_class,
+                                           ks_session):
+
+        quota._keystone_client(self.admin_context,
+                               version=(3, 0),
+                               require_admin=True)
+
+        self.assertFalse(ks_password.called)
+        kc_class.assert_called_once_with(
+            auth_url=CONF.keystone_authtoken.auth_uri,
+            session=ks_session(), version=(3, 0))
+
+    @mock.patch('keystoneclient.client.Client')
+    def test_get_project_neighbours(self, kc_class):
+
+        keystoneclient = kc_class.return_value
+
+        returned_project = FakeProject(id='fake_project_id',
+                                       domain_id='fake_domain_id')
+
+        returned_neighbours = [FakeProject(id='fake_project_id_%s' % i,
+                                           domain_id='fake_domain_id')
+                               for i in range(5)]
+
+        keystoneclient.projects.get.return_value = returned_project
+        keystoneclient.projects.list.return_value = returned_neighbours
+
+        domain_id, neighbours = quota.get_project_neighbours(
+            self.user_context,
+            project_id=self.user_context.project_id)
+
+        self.assertEqual('fake_domain_id', domain_id)
+        self.assertEqual(returned_neighbours, neighbours)
+        keystoneclient.projects.get.assert_called_once_with(
+            self.user_context.project_id)
+        keystoneclient.projects.list.assert_called_once_with(
+            domain='fake_domain_id')
+
+    @mock.patch('keystoneclient.client.Client')
+    def test_get_project_neighbours_proj_not_found(self, kc_class):
+        keystoneclient = kc_class.return_value
+
+        keystoneclient.projects.get.side_effect = kc_exceptions.NotFound
+
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          quota.get_project_neighbours,
+                          self.user_context, self.user_context.project_id)

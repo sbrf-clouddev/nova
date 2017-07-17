@@ -3797,6 +3797,65 @@ def _calculate_overquota(project_quotas, user_quotas, deltas,
     return overs
 
 
+def _get_quota_usages_aggregate(context, project_ids):
+    rows = model_query(
+        context,
+        models.QuotaUsage,
+        args=(models.QuotaUsage.resource,
+              func.sum(models.QuotaUsage.in_use).label('in_use'),
+              func.sum(models.QuotaUsage.reserved).label('reserved')),
+        read_deleted="no").\
+        filter(models.QuotaUsage.project_id.in_(project_ids)).\
+        group_by(models.QuotaUsage.resource).with_lockmode('update').all()
+
+    for row in rows:
+        LOG.debug("Found the following aggregated resource usage:"
+                  "resource = %(resource)s, in_use = %(in_use)s,"
+                  "reserved = %(reserved)s", {'resource': row.resource,
+                                             'in_use': row.in_use,
+                                             'reserved': row.reserved})
+
+    return {row.resource: {'in_use': row.in_use, 'reserved': row.reserved}
+            for row in rows}
+
+
+@require_context
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.reader
+def quota_domain_usage_check(context, quotas, deltas, domain_id,
+                             neighbours_ids):
+    """Checks if resources usage go over domain quotas."""
+
+    LOG.debug("Getting usage information for %s", domain_id)
+    domain_usages = _get_quota_usages_aggregate(context, neighbours_ids)
+
+    LOG.debug("Checking quota usage for domain: quotas = %(quotas)s,"
+              "domain id = %(domain_id)s",
+              {'quotas': quotas, 'domain_id': domain_id})
+
+    for resource, value in deltas.items():
+        if resource not in quotas:
+            continue
+
+        domain_resource_limit = quotas[resource]
+
+        if resource not in domain_usages:
+            continue
+
+        domain_resource_usage = domain_usages[resource]['in_use'] + \
+                                domain_usages[resource]['reserved']
+
+        if domain_resource_usage + value > domain_resource_limit:
+            LOG.warning(_LW("Estimated domain resources usage is over "
+                            "quota limits"))
+            raise exception.OverQuota(overs=sorted([resource]),
+                                      quotas=quotas,
+                                      usages=domain_usages)
+
+    LOG.debug("Estimated resources usage for domain %s "
+              "does not exceed quota limits", domain_id)
+
+
 @require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 @pick_context_manager_writer
